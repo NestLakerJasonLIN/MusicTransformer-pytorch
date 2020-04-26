@@ -21,6 +21,21 @@ INSTRUMENT_OFFSET = {
     'Strings': 128 * 4
 }
 
+IDX_TO_INSTRUMENT = {
+    0: 'Drums',
+    1: 'Piano',
+    2: 'Guitar',
+    3: 'Bass',
+    4: 'Strings'
+}
+
+INSTRUMENT_TO_FIELDS = {
+    'Drums': {'program': 0, 'is_drum': True},
+    'Piano': {'program': 0, 'is_drum': False},
+    'Guitar': {'program': 24, 'is_drum': False},
+    'Bass': {'program': 32, 'is_drum': False},
+    'Strings': {'program': 48, 'is_drum': False},
+}
 
 class SustainAdapter:
     def __init__(self, time, type):
@@ -82,7 +97,11 @@ class Event:
     @staticmethod
     def from_int(int_value):
         info = Event._type_check(int_value)
-        return Event(info['type'], info['value'])
+        if info['type'] in ['note_on', 'note_off']:
+            assert 'instrument' in info
+            return Event(info['type'], info['value'], info['instrument'])
+        else:
+            return Event(info['type'], info['value'])
 
     @staticmethod
     def _type_check(int_value):
@@ -93,10 +112,10 @@ class Event:
         valid_value = int_value
 
         if int_value in range_note_on:
-            return {'type': 'note_on', 'value': valid_value}
+            return {'type': 'note_on', 'value': int_value % 128, 'instrument': IDX_TO_INSTRUMENT[int_value // 128]}
         elif int_value in range_note_off:
             valid_value -= RANGE_NOTE_ON
-            return {'type': 'note_off', 'value': valid_value}
+            return {'type': 'note_off', 'value': valid_value % 128, 'instrument': IDX_TO_INSTRUMENT[valid_value // 128]}
         elif int_value in range_time_shift:
             valid_value -= (RANGE_NOTE_ON + RANGE_NOTE_OFF)
             return {'type': 'time_shift', 'value': valid_value}
@@ -117,24 +136,28 @@ def _divide_note(notes, instrument):
 
 
 def _merge_note(snote_sequence):
-    note_on_dict = {}
-    result_array = []
+    note_on_dicts = {}
+    result_arrays = {}
+
+    for instrument in INSTRUMENT_OFFSET:
+        note_on_dicts[instrument] = {}
+        result_arrays[instrument] = []
 
     for snote in snote_sequence:
         # print(note_on_dict)
         if snote.type == 'note_on':
-            note_on_dict[snote.value] = snote
+            note_on_dicts[snote.instrument][snote.value] = snote
         elif snote.type == 'note_off':
             try:
-                on = note_on_dict[snote.value]
+                on = note_on_dicts[snote.instrument][snote.value]
                 off = snote
                 if off.time - on.time == 0:
                     continue
                 result = pretty_midi.Note(on.velocity, snote.value, on.time, off.time)
-                result_array.append(result)
+                result_arrays[snote.instrument].append(result)
             except:
                 print('info removed pitch: {}'.format(snote.value))
-    return result_array
+    return result_arrays
 
 
 def _snote2events(snote: SplitNote, prev_vel: int):
@@ -158,7 +181,7 @@ def _event_seq2snote_seq(event_sequence):
         if event.type == 'velocity':
             velocity = event.value * 4
         else:
-            snote = SplitNote(event.type, timeline, event.value, velocity)
+            snote = SplitNote(event.type, timeline, event.value, velocity, event.instrument)
             snote_seq.append(snote)
     return snote_seq
 
@@ -245,15 +268,18 @@ def decode_midi(idx_array, file_path=None):
     event_sequence = [Event.from_int(idx) for idx in idx_array]
     # print(event_sequence)
     snote_seq = _event_seq2snote_seq(event_sequence)
-    note_seq = _merge_note(snote_seq)
-    note_seq.sort(key=lambda x:x.start)
+    note_seqs = _merge_note(snote_seq)
 
     mid = pretty_midi.PrettyMIDI()
-    # if want to change instument, see https://www.midi.org/specifications/item/gm-level-1-sound-set
-    instument = pretty_midi.Instrument(1, False, "Developed By Yang-Kichang")
-    instument.notes = note_seq
 
-    mid.instruments.append(instument)
+    for instrument, note_seq in note_seqs.items():
+        note_seq.sort(key=lambda x:x.start)
+        # if want to change instrument, see https://www.midi.org/specifications/item/gm-level-1-sound-set
+        program, is_drum = INSTRUMENT_TO_FIELDS[instrument]['program'], INSTRUMENT_TO_FIELDS[instrument]['is_drum']
+        instrument = pretty_midi.Instrument(program, is_drum, instrument)
+        instrument.notes = note_seq
+
+        mid.instruments.append(instrument)
     if file_path is not None:
         mid.write(file_path)
     return mid
