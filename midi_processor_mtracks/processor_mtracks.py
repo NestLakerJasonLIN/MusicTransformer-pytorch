@@ -263,6 +263,34 @@ def encode_midi(file_path):
 
     return [e.to_int() for e in events]
 
+def encode_midi_mtracks(file_path):
+    instrument_events = {}
+    events = []
+    dnotes = []
+    mid = pretty_midi.PrettyMIDI(midi_file=file_path)
+
+    # scan all instruments and store into dict <instrument, split_note_list>
+    for inst in mid.instruments:
+        inst_notes = inst.notes
+        dnotes += _divide_note(inst_notes, inst.name)
+
+        # print(dnotes)
+        dnotes.sort(key=lambda x: x.time)
+        # print('sorted:')
+        # print(dnotes)
+        cur_time = 0
+        cur_vel = 0
+        for snote in dnotes:
+            events += _make_time_sift_events(prev_time=cur_time, post_time=snote.time)
+            events += _snote2events(snote=snote, prev_vel=cur_vel)
+            # events += _make_time_sift_events(prev_time=cur_time, post_time=snote.time)
+
+            cur_time = snote.time
+            cur_vel = snote.velocity
+
+        instrument_events[inst.name] = [e.to_int() for e in events]
+
+    return instrument_events
 
 def decode_midi(idx_array, file_path=None):
     event_sequence = [Event.from_int(idx) for idx in idx_array]
